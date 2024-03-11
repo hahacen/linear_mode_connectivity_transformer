@@ -14,6 +14,7 @@ import torch.nn.functional as F
 from torchtext.datasets import PennTreebank
 from torchtext.data.utils import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
+import matplotlib.pyplot as plt
 
 
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
@@ -321,6 +322,8 @@ def interpolated_network(model_A, model_B, training = False):
     alpha = 0
     net1_params = get_network_parameters(model_A)
     net2_params = get_network_parameters(model_B)
+    alpha_values = []
+    losses = []
     assert type(model_A) == type(model_B), "Networks must have the same architecture"
     
     config = {"ntoken" : len(vocab),  # size of vocabulary
@@ -345,6 +348,7 @@ def interpolated_network(model_A, model_B, training = False):
     sup_loss = float('-inf')        
     cur_loss = float('-inf')
     cur_ppl =  float('-inf')
+    mode = "train"
     while alpha < 1.01:
         interpolated_network = _interpolate_network(alpha)
         interpolated_network.id = str(alpha)
@@ -357,21 +361,35 @@ def interpolated_network(model_A, model_B, training = False):
             # test_loss, test_ppl = run_result(interpolated_network, alpha = alpha)
             # writer.add_scalar(f"loss/alpha", test_loss, alpha)
             # writer.add_scalar(f"ppl/alpha", test_ppl, alpha)
+            mode = "test"
             cur_loss, cur_ppl = run_result(interpolated_network, alpha, train=False)
         # writer.add_scalar()
-        writer.add_scalar(f"loss/alpha", cur_loss, alpha)
-        writer.add_scalar(f"ppl/alpha", cur_ppl, alpha)
+        # writer.add_scalar(f"loss_{mode}/alpha", alpha, cur_loss)
+        # writer.add_scalar(f"ppl_{mode}/alpha", cur_ppl, alpha)
+        alpha_values.append(alpha)
+        losses.append(cur_loss)
         if cur_loss > sup_loss:
             sup_loss = cur_loss
             sup_alpha = alpha
         alpha = alpha+epsilon
+        plt.figure(figsize=(10, 5))
+        plt.plot(alpha_values, losses, marker='o', linestyle='-', color='b')
+        plt.title('Loss vs Alpha')
+        plt.xlabel('Alpha')
+        plt.ylabel('Loss')
+        plt.grid(True)
+        plt.show()
     return sup_alpha, sup_loss
 
 def load_checkpoint(model, path = None, start_point = None):
     state_dict = None
+    assert os.path.exists(path=path)
     if start_point is not None: 
         path = f"checkpoint/model_{model.id}/checkpoint_{model.id}_{start_point}.pt"
-        state_dict = torch.load(path, map_location=torch.device('cpu'))
+        if os.path.exists(path=path):
+            state_dict = torch.load(path, map_location=torch.device('cpu'))
+        else:
+            return None
     else: 
         state_dict = torch.load(path, map_location=torch.device('cpu'))
     # Update the model's state dictionary
@@ -437,11 +455,22 @@ def analysis_init(model):
     net_copy1.id = "init_copy1"
     net_copy2.id = "init_copy2"
 
-    # roll_iter(net_copy1, optimizer_in=optimizer_1, seed=41, shuffle=True)
-    roll_iter(net_copy1, seed=41, shuffle=True)
-    roll_iter(net_copy2, seed=40, shuffle=True)
+    net1 = load_checkpoint(net_copy1, start_point=epochs)
+    net2 = load_checkpoint(net_copy2, start_point=epochs)
+    
+    # check is already saved, then load from checkpoint
+    if net1 is not None:
+        net_copy1 = net1
+    else: 
+        roll_iter(net_copy1, seed=41, shuffle=True)
 
-    interpolated_network(net_copy1, net_copy2)
+    if net2 is not None:
+        net_copy2 = net2
+    else:
+        roll_iter(net_copy2, seed=40, shuffle=True)
+
+    interpolated_network(net_copy1, net_copy2, training=False)
+    interpolated_network(net_copy1, net_copy2, training=True)
     # run_result()
     # pass
 # roll_iter(model_A)
