@@ -140,9 +140,9 @@ model_B = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout, mode
 
 
 criterion = nn.CrossEntropyLoss()
-lr = 4.5  # learning rate
+lr = 2.5  # learning rate
 best_val_loss = float('inf')
-epochs = 8
+epochs = 1
 
 def get_batch(source, i: int):
     """
@@ -159,11 +159,35 @@ def get_batch(source, i: int):
     target = source[i+1:i+1+seq_len].reshape(-1)
     return data, target
 
+def shuffle_data(data, seed=None):
+    """
+    Shuffle the columns of the input tensor to introduce randomness
+    in the order of sequences while preserving the internal order within each sequence,
+    with an optional seed for controlled randomness.
 
-def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = None, alpha = -1) -> None:
+    Args:
+        data: Tensor, shape [seq_len, batch_size]
+        seed: Optional[int], a seed for the random number generator for reproducibility
+
+    Returns:
+        Shuffled data with the same shape.
+    """
+    seq_len, batch_size = data.shape
+    if seed is not None:
+        torch.manual_seed(seed)  # Set the random seed if provided
+    
+    # Generate a permutation of indices and use it to shuffle the columns
+    indices = torch.randperm(batch_size)
+    shuffled_data = data[:, indices]
+    # print(indices)
+    return shuffled_data
+
+def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = None, alpha = -1, train_data =train_data) -> None:
     model.train()  # turn on train mode
     total_loss = 0.
-    log_interval = 600
+    log_interval = 200
+    total_correct = 0
+    total_samples = 0
     start_time = time.time()
 
     num_batches = len(train_data) // bptt
@@ -173,6 +197,9 @@ def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = No
         output_flat = output.view(-1, ntokens)
         loss = criterion(output_flat, targets)
 
+        _, predicted = torch.max(output_flat, 1)
+        total_correct += (predicted == targets).sum().item()
+        total_samples += targets.size(0)
 
         optimizer.zero_grad()
         loss.backward()
@@ -183,23 +210,29 @@ def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = No
             lr = scheduler.get_last_lr()[0]
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
             cur_loss = total_loss / log_interval
+            cur_accuracy = total_correct / total_samples
             ppl = math.exp(cur_loss)
             # record the plot when at the last period of this epoch
             if log_interval > num_batches - batch:
-                writer.add_scalar("Loss/train", cur_loss, epoch)
+                writer.add_scalar(f"Loss of {model.id}/train", cur_loss, epoch)
+                writer.add_scalar(f"Accuracy of {model.id}/train", cur_accuracy, epoch)
             message = f'| epoch {epoch:3d} | {batch:5d}/{num_batches:5d} batches | '\
-                f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '\
-                f'loss {cur_loss:5.2f} | ppl {ppl:8.2f}'
+                      f'lr {lr:02.2f} | ms/batch {ms_per_batch:5.2f} | '\
+                      f'loss {cur_loss:5.2f} | ppl {ppl:8.2f} | accuracy {cur_accuracy*100:.2f}%'
             if alpha > -1:
                 message += f' | alpha {alpha}'
             print(message)
             total_loss = 0
+            total_correct = 0  # Reset for the next interval
+            total_samples = 0
             start_time = time.time()
         # iteration += 1
 
-def evaluate(model: nn.Module, eval_data) -> float:
-    model.eval()  # turn on evaluation mode
+def evaluate(model: nn.Module, eval_data):
+    model.eval()
     total_loss = 0.
+    total_accuracy = 0.
+    total_samples = 0
     with torch.no_grad():
         for i in range(0, eval_data.size(0) - 1, bptt):
             data, targets = get_batch(eval_data, i)
@@ -207,22 +240,32 @@ def evaluate(model: nn.Module, eval_data) -> float:
             output = model(data)
             output_flat = output.view(-1, ntokens)
             total_loss += seq_len * criterion(output_flat, targets).item()
-    return total_loss / (len(eval_data) - 1)
+            _, predicted = torch.max(output_flat, dim=1)
+            total_accuracy += (predicted == targets).sum().item()
+            total_samples += targets.size(0)
+    return total_loss / (len(eval_data) - 1), total_accuracy / total_samples
 
-def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None):
+def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None, optimizer_in = None, seed = 42, shuffle = False):
     best_val_loss = float('inf')
+    optimizer = None
     with TemporaryDirectory() as tempdir:
         best_model_params_path = os.path.join(tempdir, "best_model_params.pt")
-
-        for epoch in range(1, epochs + 1):
-            epoch_start_time = time.time()
+        if optimizer_in is None:
             optimizer = torch.optim.SGD(model.parameters(), lr=lr)
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
-            train(model, epoch = epoch, optimizer=optimizer, scheduler=scheduler, alpha = alpha)
-            val_loss = evaluate(model, val_data)
+        else:
+            optimizer = optimizer_in
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+        data = train_data
+        if shuffle:
+            data = shuffle_data(train_data, seed)
+        for epoch in range(1, epochs + 1):
+            epoch_start_time  = time.time()
+            train(model, epoch = epoch, optimizer=optimizer, scheduler=scheduler, alpha = alpha, train_data=data)
+            val_loss, val_acccuracy = evaluate(model, val_data)
             val_ppl = math.exp(val_loss)
-            writer.add_scalar("Loss/valid", val_loss, epoch)
-            writer.add_scalar("val_ppl/valid", val_ppl, epoch)
+            writer.add_scalar(f"Loss of {model.id}/valid", val_loss, epoch)
+            writer.add_scalar(f"val_ppl  of {model.id}/valid", val_ppl, epoch)
+            writer.add_scalar(f"Accuracy  of {model.id}/valid",val_acccuracy, epoch )
             elapsed = time.time() - epoch_start_time
             print('-' * 89)
             message = f'| end of epoch {epoch:3d} | time: {elapsed:5.2f}s | ' \
@@ -239,14 +282,28 @@ def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None):
 
             scheduler.step()
             if epoch2record is not None: 
-                torch.save(model.state_dict(), f"checkpoint/model_{model.id}/checkpoint_{model.id}_{epoch2record}.pt")
+                save_checkpoint(model=model, epoch = epoch)
             else:
-                if alpha == -1:
-                    torch.save(model.state_dict(), f"checkpoint/model_{model.id}/checkpoint_{model.id}_{epoch}.pt")
+                if alpha == -1 and model.id is not None:
+                    # torch.save(model.state_dict(), f"checkpoint/model_{model.id}/checkpoint_{model.id}_{epoch}.pt")
+                    save_checkpoint(model=model, epoch = epoch)
             
             if epoch == early_stop:
                 break
         model.load_state_dict(torch.load(best_model_params_path)) # load best model states
+
+def save_checkpoint(model, epoch):
+    model_dir = f"checkpoint/model_{model.id}"
+
+    # Check if the parent directory exists, if not, create it
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+
+    # Save the model state dict
+    model_path = os.path.join(model_dir, f"checkpoint_{model.id}_{epoch}.pt")
+    torch.save(model.state_dict(), model_path)
+
+
 
 # linear mode connectivity transformer
 def get_network_parameters(model):
@@ -286,21 +343,27 @@ def interpolated_network(model_A, model_B, training = False):
         return interpolated_net
     sup_alpha = 0
     sup_loss = float('-inf')        
-    test_loss = float('-inf')
-    test_ppl =  float('-inf')
-    while alpha < 1.1:
+    cur_loss = float('-inf')
+    cur_ppl =  float('-inf')
+    while alpha < 1.01:
         interpolated_network = _interpolate_network(alpha)
         interpolated_network.id = str(alpha)
 
         if training :
-            roll_iter(interpolated_network, alpha = alpha)
+            # roll_iter(interpolated_network, alpha = alpha)
+            cur_loss, cur_ppl = run_result(interpolated_network, alpha, train=True)
+            # pass
         else:
-            test_loss, test_ppl = run_test(interpolated_network, alpha = alpha)
-        if test_loss > sup_loss:
-            sup_loss = test_loss
+            # test_loss, test_ppl = run_result(interpolated_network, alpha = alpha)
+            # writer.add_scalar(f"loss/alpha", test_loss, alpha)
+            # writer.add_scalar(f"ppl/alpha", test_ppl, alpha)
+            cur_loss, cur_ppl = run_result(interpolated_network, alpha, train=False)
+        # writer.add_scalar()
+        writer.add_scalar(f"loss/alpha", cur_loss, alpha)
+        writer.add_scalar(f"ppl/alpha", cur_ppl, alpha)
+        if cur_loss > sup_loss:
+            sup_loss = cur_loss
             sup_alpha = alpha
-        writer.add_scalar(f"loss/interpolation/alpha", test_loss, alpha)
-        writer.add_scalar(f"ppl/interpolation/alpha", test_ppl, alpha)
         alpha = alpha+epsilon
     return sup_alpha, sup_loss
 
@@ -315,22 +378,29 @@ def load_checkpoint(model, path = None, start_point = None):
     model.load_state_dict(state_dict)
     return model
 
-def run_test(model, alpha = -1):
+def run_result(model, alpha = -1, train = False):
     # roll_iter(model)
-    test_loss = evaluate(model, test_data)
-    test_ppl = math.exp(test_loss)
-    writer.add_scalar("Loss/Test", test_loss)
-    writer.add_scalar("ppl/Test", test_ppl)
+    loss = None
+    ppl = None
+    mode = "Test"
+    data = test_data
+    if train:
+        data = train_data
+        mode = "Train"
+    loss, accuracy = evaluate(model, data)
+    ppl = math.exp(loss)
+    writer.add_scalar(f"Loss/{mode}", loss)
+    writer.add_scalar(f"ppl/{mode}", ppl)
     print('=' * 89)
-    message = f'| End of training | test loss {test_loss:5.2f} | 'f'test ppl {test_ppl:8.2f}'
+    message = f'model {model.id}| {mode} loss {loss:5.2f} | 'f'{mode} ppl {ppl:8.2f}'
     if alpha > -1:
         message += f' | alpha {alpha}'
-        writer.add_scalar("Loss_alpha/Test", test_loss, alpha)
-        writer.add_scalar("ppl_alpha/Test", test_ppl, alpha)
+        writer.add_scalar(f"Loss_alpha/{mode}", loss, alpha)
+        writer.add_scalar(f"ppl_alpha/{mode}", ppl, alpha)
     print(message)
     # print()
     print('=' * 89)
-    return test_loss, test_ppl
+    return loss, ppl
 
 def continue_training(start_point, model):
     loaded_trained = load_checkpoint(model, start_point = start_point)
@@ -340,19 +410,53 @@ def analysis4training(model_A, model_B, start_point = 4):
     # assume model A and model are all trained, with checkpoints prepared
     trained_A = load_checkpoint(model_A, start_point = start_point)
     trained_B = load_checkpoint(model_B, start_point = start_point)
-    interpolated_network(trained_A, trained_A, training = True)
+    interpolated_network(trained_A, trained_B, training = True)
     
-def analysis4test(model_A, model__B):
+def analysis4test(model_A, model_B):
     trained_A = load_checkpoint(model_A, start_point = 8)
     trained_B = load_checkpoint(model_B, start_point = 8)
-    run_test()
+    interpolated_network(trained_A, trained_B, training = False)
 
+# instability analysis at initialization(nor pretrained steps)
+def analysis_init(model):
+#    use the same network weight, but different optimizer
+    _net_copy1 = get_network_parameters(model)
+    _net_copy2 = get_network_parameters(model)
+    config = {"ntoken" : len(vocab),  # size of vocabulary
+                "d_model" : 200,  # embedding dimension
+                "d_hid" : 200,# dimension of the feedforward network model in ``nn.TransformerEncoder``
+                "nlayers" : 2,  # number of ``nn.TransformerEncoderLayer`` in ``nn.TransformerEncoder``
+                "nhead" : 2,
+                "dropout": 0.2, }  # number of heads in ``nn.MultiheadAttention``}
+    # Create a new network with the same architecture
+    net_copy1 = type(model)(**config).to(device)
+    net_copy2 = type(model)(**config).to(device)
+    
+    set_network_parameters(net_copy1, _net_copy1)
+    set_network_parameters(net_copy2, _net_copy2)
+    net_copy1.id = "init_copy1"
+    net_copy2.id = "init_copy2"
+
+    # roll_iter(net_copy1, optimizer_in=optimizer_1, seed=41, shuffle=True)
+    roll_iter(net_copy1, seed=41, shuffle=True)
+    roll_iter(net_copy2, seed=40, shuffle=True)
+
+    interpolated_network(net_copy1, net_copy2)
+    # run_result()
+    # pass
 # roll_iter(model_A)
+analysis_init(model_A)
+# run_result(model_A)
 # torch.save(model_A.state_dict(), "checkpoint/model_A/checkpoint_A_complete.pt")
 # roll_iter(model_B)
+# run_result(load_checkpoint(model_B, start_point = 8))
 # torch.save(model_B.state_dict(), "checkpoint/model_B/checkpoint_B_complete.pt")
 # epsilon_error = 0.1
-analysis4training(model_A, model_B)
+# analysis4training(model_A, model_B)
+# analysis4test(model_A, model_B)
+
+# analysis_init(model=model_A)
+
 # model_loadA = load_checkpoint(model_A, "checkpoint/model_A/checkpoint_A.pt")
 # model__loadB = load_checkpoint(model_B, "checkpoint/model_A/checkpoint_A.pt")
 # sup_alpha, sup_loss = interpolated_network(model_A, model__B)
