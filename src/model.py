@@ -335,19 +335,6 @@ def handle_result(alpha_values, train, test, start_epoch = None):
     max_test_loss = max(test)
     max_test_alpha = alpha_values[test.index(max_test_loss)]
 
-    # Annotating the max train loss on the plot
-    # plt.annotate(f'Max Train Loss: {max_train_loss}\nAlpha: {max_train_alpha}',
-    #              xy=(max_train_alpha, max_train_loss),
-    #              xytext=(max_train_alpha, max_train_loss*1.1),
-    #              arrowprops=dict(facecolor='blue', shrink=0.05),
-    #              horizontalalignment='center')
-
-    # # Annotating the max test loss on the plot
-    # plt.annotate(f'Max Test Loss: {max_test_loss}\nAlpha: {max_test_alpha}',
-    #              xy=(max_test_alpha, max_test_loss),
-    #              xytext=(max_test_alpha, max_test_loss*1.1),
-    #              arrowprops=dict(facecolor='red', shrink=0.05),
-                #  horizontalalignment='center')
 
     error_barrier_train = abs(max_train_loss - (train[0]+train[9])/2)
     error_barrier_test = abs(max_test_loss - (test[0]+test[9])/2)
@@ -425,20 +412,6 @@ def run_result(model, alpha = -1, train = False):
     print('=' * 89)
     return loss, ppl
 
-def continue_training(start_point, model):
-    loaded_trained = load_checkpoint(model, start_point = start_point)
-    roll_iter(loaded_trained)
-
-def analysis4training(model_A, model_B, start_point = 4):
-    # assume model A and model are all trained, with checkpoints prepared
-    trained_A = load_checkpoint(model_A, start_point = start_point)
-    trained_B = load_checkpoint(model_B, start_point = start_point)
-    interpolated_network(trained_A, trained_B, training = True)
-    
-def analysis4test(model_A, model_B):
-    trained_A = load_checkpoint(model_A, start_point = 8)
-    trained_B = load_checkpoint(model_B, start_point = 8)
-    interpolated_network(trained_A, trained_B, training = False)
 
 # instability analysis at initialization(nor pretrained steps)
 def analysis(model, start_epoch = None):
@@ -492,8 +465,6 @@ def integrated_analysis(model):
          train, test = analysis(model, start_epoch = epoch)
          instability_train.append(train)
          instability_test.append(test)
-         print(instability_test)
-         print(instability_train)
     training_result(instability_train, instability_test)
     print(f"test: {instability_test}")
     print(f"train: {instability_train}")
