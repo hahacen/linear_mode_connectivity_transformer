@@ -1,5 +1,6 @@
 import math
 import os
+import shutil
 
 import torch
 import torch.nn as nn
@@ -18,12 +19,11 @@ import matplotlib.pyplot as plt
 
 
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
-import inspect
 import time
 from tempfile import TemporaryDirectory
-import util
+from util import batchify, get_batch, get_random_batch_indices, save_checkpoint
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+graph_dir = "/Users/hahacen/Documents/UM_2024_WN/EECS598/linear_mode_connectivity_transformer/graph"
 class TransformerModel(nn.Module):
 
     def __init__(self, ntoken: int = 200, d_model: int = 32, nhead: int = 32, d_hid: int = 32,
@@ -105,27 +105,10 @@ train_data = data_process(train_iter)
 val_data = data_process(val_iter)
 test_data = data_process(test_iter)
 
-def batchify(data, bsz: int):
-    """Divides the data into ``bsz`` separate sequences, removing extra elements
-    that wouldn't cleanly fit.
-
-    Arguments:
-        data: Tensor, shape ``[N]``
-        bsz: int, batch size
-
-    Returns:
-        Tensor of shape ``[N // bsz, bsz]``
-    """
-    seq_len = data.size(0) // bsz
-    data = data[:seq_len * bsz]
-    data = data.view(bsz, seq_len).t().contiguous()
-    return data.to(device)
-
-batch_size = 20
+batch_size = 16
 eval_batch_size = 10
 train_data = batchify(train_data, batch_size)  # shape ``[seq_len, batch_size]``
 val_data = batchify(val_data, eval_batch_size)
-print(train_data.shape)
 test_data = batchify(test_data, eval_batch_size)
 
 bptt = 35
@@ -143,47 +126,9 @@ model_B = TransformerModel(ntokens, emsize, nhead, d_hid, nlayers, dropout, mode
 criterion = nn.CrossEntropyLoss()
 lr = 2.5  # learning rate
 best_val_loss = float('inf')
-epochs = 1
+epochs = 8
 
-def get_batch(source, i: int):
-    """
-    Args:
-        source: Tensor, shape ``[full_seq_len, batch_size]``
-        i: int
-
-    Returns:
-        tuple (data, target), where data has shape ``[seq_len, batch_size]`` and
-        target has shape ``[seq_len * batch_size]``
-    """
-    seq_len = min(bptt, len(source) - 1 - i)
-    data = source[i:i+seq_len]
-    target = source[i+1:i+1+seq_len].reshape(-1)
-    return data, target
-
-def shuffle_data(data, seed=None):
-    """
-    Shuffle the columns of the input tensor to introduce randomness
-    in the order of sequences while preserving the internal order within each sequence,
-    with an optional seed for controlled randomness.
-
-    Args:
-        data: Tensor, shape [seq_len, batch_size]
-        seed: Optional[int], a seed for the random number generator for reproducibility
-
-    Returns:
-        Shuffled data with the same shape.
-    """
-    seq_len, batch_size = data.shape
-    if seed is not None:
-        torch.manual_seed(seed)  # Set the random seed if provided
-    
-    # Generate a permutation of indices and use it to shuffle the columns
-    indices = torch.randperm(batch_size)
-    shuffled_data = data[:, indices]
-    # print(indices)
-    return shuffled_data
-
-def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = None, alpha = -1, train_data =train_data) -> None:
+def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = None, alpha = -1, train_data =train_data, seed = None) -> None:
     model.train()  # turn on train mode
     total_loss = 0.
     log_interval = 200
@@ -192,12 +137,13 @@ def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = No
     start_time = time.time()
 
     num_batches = len(train_data) // bptt
-    for batch, i in enumerate(range(0, train_data.size(0) - 1, bptt)):
-        data, targets = get_batch(train_data, i)
+    seq_len = min(bptt, train_data.size(0) - 1)
+    random_indices = get_random_batch_indices(train_data.size(0), seq_len, seed)
+    for batch, start_index in enumerate(random_indices):
+        data, targets = get_batch(train_data, start_index)
         output = model(data)
         output_flat = output.view(-1, ntokens)
         loss = criterion(output_flat, targets)
-
         _, predicted = torch.max(output_flat, 1)
         total_correct += (predicted == targets).sum().item()
         total_samples += targets.size(0)
@@ -212,7 +158,8 @@ def train(model: nn.Module, lr = lr, epoch = 0, optimizer = None, scheduler = No
             ms_per_batch = (time.time() - start_time) * 1000 / log_interval
             cur_loss = total_loss / log_interval
             cur_accuracy = total_correct / total_samples
-            ppl = math.exp(cur_loss)
+            max_loss = 10
+            ppl = math.exp(min(cur_loss, max_loss))
             # record the plot when at the last period of this epoch
             if log_interval > num_batches - batch:
                 writer.add_scalar(f"Loss of {model.id}/train", cur_loss, epoch)
@@ -246,22 +193,26 @@ def evaluate(model: nn.Module, eval_data):
             total_samples += targets.size(0)
     return total_loss / (len(eval_data) - 1), total_accuracy / total_samples
 
-def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None, optimizer_in = None, seed = 42, shuffle = False):
+def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None, optimizer_in = None,  seed = 42, shuffle = False, start = 0):
     best_val_loss = float('inf')
-    optimizer = None
+    # optimizer = None
     with TemporaryDirectory() as tempdir:
         best_model_params_path = os.path.join(tempdir, "best_model_params.pt")
-        if optimizer_in is None:
-            optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+        # if optimizer_in is None:
+        optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+        # else:
+        #     optimizer = optimizer_in
+        scheduler = None
+        if optimizer_in is not None:
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer_in, 1.0, gamma=0.95)
         else:
-            optimizer = optimizer_in
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
         data = train_data
-        if shuffle:
-            data = shuffle_data(train_data, seed)
-        for epoch in range(1, epochs + 1):
+        # if shuffle:
+        #     data = shuffle_data(train_data, seed)
+        for epoch in range(start+1, epochs + 1):
             epoch_start_time  = time.time()
-            train(model, epoch = epoch, optimizer=optimizer, scheduler=scheduler, alpha = alpha, train_data=data)
+            train(model, epoch = epoch, optimizer=optimizer, scheduler=scheduler, alpha = alpha, train_data=data, seed=seed)
             val_loss, val_acccuracy = evaluate(model, val_data)
             val_ppl = math.exp(val_loss)
             writer.add_scalar(f"Loss of {model.id}/valid", val_loss, epoch)
@@ -287,24 +238,11 @@ def roll_iter(model, alpha = -1, early_stop = epochs, epoch2record = None, optim
             else:
                 if alpha == -1 and model.id is not None:
                     # torch.save(model.state_dict(), f"checkpoint/model_{model.id}/checkpoint_{model.id}_{epoch}.pt")
-                    save_checkpoint(model=model, epoch = epoch)
+                    save_checkpoint(model=model, epoch = epoch,  optimizer=optimizer)
             
             if epoch == early_stop:
                 break
         model.load_state_dict(torch.load(best_model_params_path)) # load best model states
-
-def save_checkpoint(model, epoch):
-    model_dir = f"checkpoint/model_{model.id}"
-
-    # Check if the parent directory exists, if not, create it
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-
-    # Save the model state dict
-    model_path = os.path.join(model_dir, f"checkpoint_{model.id}_{epoch}.pt")
-    torch.save(model.state_dict(), model_path)
-
-
 
 # linear mode connectivity transformer
 def get_network_parameters(model):
@@ -324,6 +262,7 @@ def interpolated_network(model_A, model_B, training = False):
     net2_params = get_network_parameters(model_B)
     alpha_values = []
     losses = []
+    ppl = []
     assert type(model_A) == type(model_B), "Networks must have the same architecture"
     
     config = {"ntoken" : len(vocab),  # size of vocabulary
@@ -368,22 +307,87 @@ def interpolated_network(model_A, model_B, training = False):
         # writer.add_scalar(f"ppl_{mode}/alpha", cur_ppl, alpha)
         alpha_values.append(alpha)
         losses.append(cur_loss)
+        ppl.append(cur_ppl)
         if cur_loss > sup_loss:
             sup_loss = cur_loss
             sup_alpha = alpha
         alpha = alpha+epsilon
-        plt.figure(figsize=(10, 5))
-        plt.plot(alpha_values, losses, marker='o', linestyle='-', color='b')
-        plt.title('Loss vs Alpha')
-        plt.xlabel('Alpha')
-        plt.ylabel('Loss')
-        plt.grid(True)
-        plt.show()
-    return sup_alpha, sup_loss
+    return alpha_values, losses, ppl
+
+def handle_result(alpha_values, train, test, start_epoch = None):
+    plt.figure(figsize=(10, 5))
+
+    # Plotting the losses
+    plt.plot(alpha_values, train, marker='o', linestyle='-', color='b', label='Train Perplexity')
+    plt.plot(alpha_values, test, marker='x', linestyle='--', color='r', label='Test Perplexity')
+
+    # Titles and labels
+    plt.title('Perplexity vs Alpha')
+    plt.xlabel('Alpha')
+    plt.ylabel('Perplexity')
+    plt.grid(True)
+
+    # Finding the max train loss and its corresponding alpha value
+    max_train_loss = max(train)
+    max_train_alpha = alpha_values[train.index(max_train_loss)]
+
+    # Finding the max test loss and its corresponding alpha value
+    max_test_loss = max(test)
+    max_test_alpha = alpha_values[test.index(max_test_loss)]
+
+    # Annotating the max train loss on the plot
+    # plt.annotate(f'Max Train Loss: {max_train_loss}\nAlpha: {max_train_alpha}',
+    #              xy=(max_train_alpha, max_train_loss),
+    #              xytext=(max_train_alpha, max_train_loss*1.1),
+    #              arrowprops=dict(facecolor='blue', shrink=0.05),
+    #              horizontalalignment='center')
+
+    # # Annotating the max test loss on the plot
+    # plt.annotate(f'Max Test Loss: {max_test_loss}\nAlpha: {max_test_alpha}',
+    #              xy=(max_test_alpha, max_test_loss),
+    #              xytext=(max_test_alpha, max_test_loss*1.1),
+    #              arrowprops=dict(facecolor='red', shrink=0.05),
+                #  horizontalalignment='center')
+
+    error_barrier_train = abs(max_train_loss - (train[0]+train[9])/2)
+    error_barrier_test = abs(max_test_loss - (test[0]+test[9])/2)
+    instability_train = error_barrier_train/max_train_loss
+    instability_test = error_barrier_test/max_test_loss
+    print(f"instability of train {instability_train}")
+    print(f"instability of test {instability_test}")
+    # Showing legend
+    plt.legend()
+    if start_epoch ==0:
+        start_epoch = "initialization"
+    filename = os.path.join(graph_dir, f"PPL vs alpha from {start_epoch}")
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    # Display the plot
+    # plt.show()
+    return instability_train, instability_test
+
+def training_result(train, test, epochs=epochs):
+    epochs = range(0,epochs, 1)
+    plt.figure(figsize=(10, 5))
+
+    # Plotting the losses
+    plt.plot(epochs, train, marker='o', linestyle='-', color='b', label='Train Instability')
+    plt.plot(epochs, test, marker='x', linestyle='--', color='r', label='Test Instability')
+
+    # Titles and labels
+    plt.title('Instability vs Epochs')
+    plt.xlabel('Epochs')
+    plt.ylabel('Instability')
+    plt.grid(True)
+    plt.legend()
+    filename = os.path.join(graph_dir, "instability_vs_epochs.png")
+    plt.savefig(filename, dpi=300, bbox_inches='tight')
+    # Display the plot
+    # plt.show()
 
 def load_checkpoint(model, path = None, start_point = None):
     state_dict = None
-    assert os.path.exists(path=path)
+    if path is not None:
+        assert os.path.exists(path=path)
     if start_point is not None: 
         path = f"checkpoint/model_{model.id}/checkpoint_{model.id}_{start_point}.pt"
         if os.path.exists(path=path):
@@ -393,8 +397,9 @@ def load_checkpoint(model, path = None, start_point = None):
     else: 
         state_dict = torch.load(path, map_location=torch.device('cpu'))
     # Update the model's state dictionary
-    model.load_state_dict(state_dict)
-    return model
+    model.load_state_dict(state_dict["model_state"])
+    optimizer = state_dict["optimizer"]
+    return model, optimizer
 
 def run_result(model, alpha = -1, train = False):
     # roll_iter(model)
@@ -436,7 +441,7 @@ def analysis4test(model_A, model_B):
     interpolated_network(trained_A, trained_B, training = False)
 
 # instability analysis at initialization(nor pretrained steps)
-def analysis_init(model):
+def analysis(model, start_epoch = None):
 #    use the same network weight, but different optimizer
     _net_copy1 = get_network_parameters(model)
     _net_copy2 = get_network_parameters(model)
@@ -452,29 +457,53 @@ def analysis_init(model):
     
     set_network_parameters(net_copy1, _net_copy1)
     set_network_parameters(net_copy2, _net_copy2)
-    net_copy1.id = "init_copy1"
-    net_copy2.id = "init_copy2"
 
-    net1 = load_checkpoint(net_copy1, start_point=epochs)
-    net2 = load_checkpoint(net_copy2, start_point=epochs)
-    
-    # check is already saved, then load from checkpoint
-    if net1 is not None:
-        net_copy1 = net1
-    else: 
-        roll_iter(net_copy1, seed=41, shuffle=True)
+    # cut = 0
+    if start_epoch > 0:
+        net_copy1.id = f"continue_train_from_{start_epoch}_1"
+        net_copy2.id = f"continue_train_from_{start_epoch}_2"
+        net_copy1, optimizer_1 = load_checkpoint(net_copy1, path=f"/Users/hahacen/Documents/UM_2024_WN/EECS598/linear_mode_connectivity_transformer/src/checkpoint/model_B/checkpoint_B_{start_epoch}.pt")
+        net_copy2, optimizer_2= load_checkpoint(net_copy2, path=f"/Users/hahacen/Documents/UM_2024_WN/EECS598/linear_mode_connectivity_transformer/src/checkpoint/model_B/checkpoint_B_{start_epoch}.pt")
+        if start_epoch < epochs:
+            roll_iter(net_copy1, seed=45, start=start_epoch,  optimizer_in=optimizer_1 )
+            roll_iter(net_copy2, seed=46, shuffle=True, start=start_epoch, optimizer_in=optimizer_2)
+    elif start_epoch==0:
+        net_copy1.id = f"initial_copy1"
+        net_copy2.id = f"initial_copy1"
+        state_dict_1 = torch.load("/Users/hahacen/Documents/UM_2024_WN/EECS598/linear_mode_connectivity_transformer/src/checkpoint/model_init_copy1/checkpoint_init_copy1_8.pt", map_location=torch.device('cpu'))
+        state_dict_2 = torch.load("/Users/hahacen/Documents/UM_2024_WN/EECS598/linear_mode_connectivity_transformer/src/checkpoint/model_init_copy2/checkpoint_init_copy2_8.pt", map_location=torch.device('cpu'))
+        net_copy1.load_state_dict(state_dict_1)
+        net_copy2.load_state_dict(state_dict_2)
 
-    if net2 is not None:
-        net_copy2 = net2
-    else:
-        roll_iter(net_copy2, seed=40, shuffle=True)
+    alpha_values, test_loss, test_ppl = interpolated_network(net_copy1, net_copy2, training=False)
+    alpha_values, train_loss, train_ppl = interpolated_network(net_copy1, net_copy2, training=True)
+    return handle_result(alpha_values=alpha_values, test=test_ppl, train=train_ppl, start_epoch=start_epoch)
 
-    interpolated_network(net_copy1, net_copy2, training=False)
-    interpolated_network(net_copy1, net_copy2, training=True)
     # run_result()
     # pass
+
+# train the network for k steps, and then make two copies,
+# then continue training until the end
+# asuum: model B is well pretrained, 
+def integrated_analysis(model):
+    instability_train = []
+    instability_test = []
+    for epoch in range(0,epochs, 1):
+         train, test = analysis(model, start_epoch = epoch)
+         instability_train.append(train)
+         instability_test.append(test)
+         print(instability_test)
+         print(instability_train)
+    training_result(instability_train, instability_test)
+    print(f"test: {instability_test}")
+    print(f"train: {instability_train}")
+# roll_iter(model_B, seed=42)
+# analysis(model_B, start_epoch=1)
+# analysis(model_B, start_epoch=1)
+integrated_analysis(model_B)
+# roll_iter(model_A, seed=42)
+# analysis_init(model_A, seed = 5)
 # roll_iter(model_A)
-analysis_init(model_A)
 # run_result(model_A)
 # torch.save(model_A.state_dict(), "checkpoint/model_A/checkpoint_A_complete.pt")
 # roll_iter(model_B)
