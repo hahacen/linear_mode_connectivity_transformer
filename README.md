@@ -13,7 +13,7 @@ This project delves into the exploration of linear mode connectivity within Tran
 3. **Stability Thresholds and Metrics:** Instability under 2% was considered stable, with perplexity (ppl) selected as the metric over accuracy for this specific task.
 
 ## Findings
-- Initial analysis showed a notable instability in model behavior, with training and testing perplexity instability at 17% and 20.5% respectively.
+- Initial analysis showed a notable instability in model behavior, with training and testing perplexity instability at 14.9% and 13.7% respectively.
 - A significant reduction in instability was observed after the first epoch of training, highlighting the model's evolving response to SGD noise.
 
 ## Conclusion
