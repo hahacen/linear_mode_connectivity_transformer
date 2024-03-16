@@ -16,5 +16,8 @@ This project delves into the exploration of linear mode connectivity within Tran
 - Initial analysis showed a notable instability in model behavior, with training and testing perplexity instability at 14.9% and 13.7% respectively.
 - A significant reduction in instability was observed after the first epoch of training, highlighting the model's evolving response to SGD noise.
 
+## Use
+- The core functions are in scr/model.py, with some utility functions in scr/util.py. I save the model checkpoint in src/checkpoint/, the results are plotted in src/graph.
+  
 ## Conclusion
 The investigation sheds light on the critical aspects of model stability, offering valuable insights into the dynamics of linear mode connectivity in the context of Transformer models and language modeling. This contributes to a deeper understanding of model behavior under the influence of SGD noise, paving the way for further research and optimization strategies.
