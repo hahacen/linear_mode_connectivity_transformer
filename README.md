@@ -1,7 +1,5 @@
 # Linear Mode Connectivity in Transformer Models
 
-## Overview
-With reference to this [paper](https://arxiv.org/abs/1912.05671), this project delves into the exploration of linear mode connectivity within Transformer models, specifically for language modeling tasks on the Penn Treebank dataset. The core objective revolves around understanding the model's stability to Stochastic Gradient Descent (SGD) noise and its implications for linear connectivity.
 ## How to Use
 - The core functions are in `src` directory
     - `src/model.py`
@@ -18,6 +16,11 @@ With reference to this [paper](https://arxiv.org/abs/1912.05671), this project d
 3. the log will be saved to `src/runs`, which can be checked on Tensorboard
 4. the checkpoint is save to `src/checkpoint`
 5. the plots are saved to `graph`
+
+Note: for clarity, I didn't push my log, checkpoint, and plots on Github, you will have these directories after running the experiments.
+
+## Overview
+With reference to this [paper](https://arxiv.org/abs/1912.05671), this project delves into the exploration of linear mode connectivity within Transformer models, specifically for language modeling tasks on the Penn Treebank dataset. The core objective revolves around understanding the model's stability to Stochastic Gradient Descent (SGD) noise and its implications for linear connectivity.
 
    
 ## Key Concepts
