@@ -14,7 +14,10 @@ This project delves into the exploration of linear mode connectivity within Tran
 
 ## Results
 - Initial analysis showed a notable instability in model behavior, with training and testing perplexity instability at 14.9% and 13.7% respectively.
+![PPL vs alpha from initialization](https://github.com/hahacen/linear_mode_connectivity_transformer/assets/103203631/40c01a8f-a731-4ba7-aea5-582330a82b67)
 - A significant reduction in instability was observed after the first epoch of training, highlighting the model's evolving response to SGD noise.
+![5231710652821_ pic](https://github.com/hahacen/linear_mode_connectivity_transformer/assets/103203631/902dabb1-b9c2-4e66-84d3-81ac20328c69)
+
 
 ## Use
 - The core functions are in scr/model.py, with some utility functions in scr/util.py. I save the model checkpoint in src/checkpoint/, the results are plotted in src/graph.
