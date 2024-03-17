@@ -1,7 +1,7 @@
 # Linear Mode Connectivity in Transformer Models
 
 ## Overview
-This project delves into the exploration of linear mode connectivity within Transformer models, specifically for language modeling tasks on the Penn Treebank dataset. The core objective revolves around understanding the model's stability to Stochastic Gradient Descent (SGD) noise and its implications for linear connectivity.
+With reference to this [paper](https://arxiv.org/abs/1912.05671), this project delves into the exploration of linear mode connectivity within Transformer models, specifically for language modeling tasks on the Penn Treebank dataset. The core objective revolves around understanding the model's stability to Stochastic Gradient Descent (SGD) noise and its implications for linear connectivity.
 
 ## Key Concepts
 - **Error Barrier Height Analysis:** A critical measure to assess the stability of the network to SGD noise, focusing on the difference between supreme and expected error barriers.
