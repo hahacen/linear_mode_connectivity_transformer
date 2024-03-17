@@ -14,7 +14,7 @@
 1. change directory to src: `src`
 2. run the model `python model.py`
 3. the log will be saved to `src/runs`, which can be checked on Tensorboard
-4. the checkpoint is save to `src/checkpoint`
+4. the checkpoint is saved to `src/checkpoint`
 5. the plots are saved to `graph`
 
 Note: for clarity, I didn't push my log, checkpoint, and plots on Github, you will have these directories after running the experiments.
