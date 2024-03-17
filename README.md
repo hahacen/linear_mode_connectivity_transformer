@@ -1,4 +1,4 @@
-# Linear Mode Connectivity in Transformer Models
+# Linear Mode Connectivity Analysis in Transformer Models
 
 ## How to Use
 - The core functions are in `src` directory
